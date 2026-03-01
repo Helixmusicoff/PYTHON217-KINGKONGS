@@ -1,0 +1,46 @@
+import sqlite3
+
+# Создание базы данных и таблицы, если она не существует
+def setup_database():
+    db_path = 'databaze/scores.db'
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS scores (
+            user_id INTEGER PRIMARY KEY,
+            score INTEGER DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# Функция для добавления или обновления очков пользователя
+def update_score(user_id, score_increment):
+    db_path = 'databaze/scores.db'
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO scores (user_id, score) VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET score = score + ?
+    ''', (user_id, score_increment, score_increment))
+    conn.commit()
+    conn.close()
+
+# Функция для получения очков пользователя
+def get_score(user_id):
+    db_path = 'databaze/scores.db'
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('SELECT score FROM scores WHERE user_id = ?', (user_id,))
+    score = cursor.fetchone()
+    conn.close()
+    return score[0] if score else 0
+      
+# Функция для отображения IQ
+def iq(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    score = get_score(user_id)
+
+    # Простой расчет IQ в зависимости от очков
+    iq_score = 100 + (score * 10)
+    update.message.reply_text(f"Ваш IQ: {iq_score}")
