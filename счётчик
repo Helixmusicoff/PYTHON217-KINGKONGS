@@ -1,14 +1,2 @@
-# Словарь для хранения очков пользователей
-user_scores = {}
-
-# Функция для отображения IQ
-def iq(update: Update, context: CallbackContext) -> None:
-    user_id = update.message.from_user.id
-    score = user_scores.get(user_id, 0)
-      
-# Простой расчет IQ в зависимости от очков
-    iq_score = 100 + (score * 10)  # Например: 10 очков = IQ 200
-    update.message.reply_text(f"Ваш IQ: {iq_score}")
-
 
       
