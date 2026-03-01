@@ -1,3 +1,6 @@
+# Словарь для хранения очков пользователей
+user_scores = {}
+
 # Функция для отображения IQ
 def iq(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
