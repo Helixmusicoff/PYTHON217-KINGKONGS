@@ -1,0 +1,183 @@
+"""
+IQ-тест для Telegram бота (с базой данных и отдельным конфигом)
+Команды:
+/start - приветствие
+/iqtest - начать тест
+/iq - показать текущий IQ
+"""
+
+import asyncio
+import os
+import sqlite3
+from pyrogram import Client, filters
+from pyrogram.types import Message
+
+# Импортируем настройки из config.py
+from config import API_ID, API_HASH, BOT_TOKEN
+
+# --- Функции для работы с БД (из первого кода, с небольшими улучшениями) ---
+DB_PATH = 'databaze/scores.db'
+
+def setup_database():
+    """Создаёт папку и таблицу, если их нет."""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS scores (
+            user_id INTEGER PRIMARY KEY,
+            score INTEGER DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def update_score(user_id, score_increment):
+    """Добавляет очки пользователю (или создаёт запись)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO scores (user_id, score) VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET score = score + ?
+    ''', (user_id, score_increment, score_increment))
+    conn.commit()
+    conn.close()
+
+def get_score(user_id):
+    """Возвращает текущее количество очков пользователя (0, если нет записи)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT score FROM scores WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else 0
+# -------------------------------------------------------------------------
+
+# Хранилище данных пользователей (в оперативной памяти для активных сессий)
+user_sessions = {}
+
+# Вопросы теста (вопрос, варианты ответов, индекс правильного ответа)
+QUESTIONS = [
+    {
+        "question": "Сколько месяцев в году имеют 28 дней?",
+        "options": ["1", "2", "12", "Все"],
+        "correct": 3
+    },
+    {
+        "question": "Что тяжелее: килограмм ваты или килограмм железа?",
+        "options": ["Вата", "Железо", "Одинаково"],
+        "correct": 2
+    },
+    {
+        "question": "Если перевернуть эту цифру, она уменьшится на 3. Что это за цифра?",
+        "options": ["6", "8", "9", "3"],
+        "correct": 2
+    },
+    {
+        "question": "У человека было 10 овец. Все, кроме 9, умерли. Сколько осталось?",
+        "options": ["1", "9", "10", "0"],
+        "correct": 1
+    },
+    {
+        "question": "Что можно приготовить, но нельзя съесть?",
+        "options": ["Суп", "Уроки", "Кофе", "Завтрак"],
+        "correct": 1
+    }
+]
+
+# Инициализация бота (используем импортированные данные)
+bot = Client("iq_test_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# Функция отправки следующего вопроса
+async def send_question(chat_id, user_id):
+    step = user_sessions[user_id]["step"]
+    if step < len(QUESTIONS):
+        q = QUESTIONS[step]
+        options_text = "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(q["options"])])
+        await bot.send_message(
+            chat_id,
+            f"❓ Вопрос {step+1}/{len(QUESTIONS)}:\n\n"
+            f"{q['question']}\n\n{options_text}\n\n"
+            f"📝 Отправьте номер ответа (1-{len(q['options'])})."
+        )
+    else:
+        # Тест окончен, вычисляем результат
+        score = user_sessions[user_id]["score"]
+        total = len(QUESTIONS)
+
+        # Сохраняем результат в базу данных (добавляем очки)
+        update_score(user_id, score)
+
+        # Получаем обновлённый общий счёт и считаем IQ по формуле из первого кода
+        total_score = get_score(user_id)
+        iq = 100 + total_score * 10
+
+        await bot.send_message(
+            chat_id,
+            f"✅ Тест завершён!\n\n"
+            f"Правильных ответов в этом тесте: {score} из {total}\n"
+            f"🧠 Ваш общий IQ (с учётом всех попыток): {iq}\n\n"
+            f"Чтобы пройти заново, введите /iqtest"
+        )
+        # Очищаем сессию пользователя
+        del user_sessions[user_id]
+
+# Команда /start
+@bot.on_message(filters.command("start"))
+async def start_cmd(client: Client, message: Message):
+    await message.reply(
+        "👋 Привет! Я бот для проверки IQ.\n"
+        "Чтобы пройти очень простой тест, отправьте команду /iqtest\n"
+        "Команда /iq покажет ваш текущий IQ."
+    )
+
+# Команда /iqtest (начало теста)
+@bot.on_message(filters.command("iqtest"))
+async def iqtest_cmd(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id in user_sessions:
+        await message.reply("Вы уже проходите тест. Хотите начать заново? Отправьте /iqtest ещё раз.")
+        return
+    user_sessions[user_id] = {"step": 0, "score": 0}
+    await send_question(message.chat.id, user_id)
+
+# Команда /iq (показывает текущий IQ)
+@bot.on_message(filters.command("iq"))
+async def iq_cmd(client: Client, message: Message):
+    user_id = message.from_user.id
+    total_score = get_score(user_id)
+    iq = 100 + total_score * 10
+    await message.reply(f"🧠 Ваш текущий IQ: {iq}")
+
+# Обработчик текстовых ответов (номера ответов)
+@bot.on_message(filters.text & filters.private & ~filters.command(["start", "iqtest", "iq"]))
+async def handle_answer(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in user_sessions:
+        return
+
+    step = user_sessions[user_id]["step"]
+    if step >= len(QUESTIONS):
+        return
+
+    try:
+        answer_num = int(message.text.strip())
+    except ValueError:
+        await message.reply("Пожалуйста, введите число (номер ответа).")
+        return
+
+    q = QUESTIONS[step]
+    if 1 <= answer_num <= len(q["options"]):
+        if answer_num - 1 == q["correct"]:
+            user_sessions[user_id]["score"] += 1
+        user_sessions[user_id]["step"] += 1
+        await send_question(message.chat.id, user_id)
+    else:
+        await message.reply(f"Введите число от 1 до {len(q['options'])}.")
+
+# Запуск бота
+if __name__ == "__main__":
+    # Инициализируем базу данных перед запуском
+    setup_database()
+    print("Бот запущен...")
+    bot.run()
